@@ -7,9 +7,8 @@ import numpy as np
 
 
 class perlin_noise:
-    def __init__(self, width, height):
-        self.size = [width, height]
-        self.grid = self.vector_grid()
+    def __init__(self):
+        self.grid = {}
 
 
     def random_unit_vector(self):
@@ -17,16 +16,6 @@ class perlin_noise:
         x = np.cos(angle)
         y = np.sin(angle)
         return [x, y]
-
-
-    def vector_grid(self):
-        grid_rows = self.size[0] + 1
-        grid_columns = self.size[1] + 1
-        grid = [[] for row in range(grid_rows)]
-        for row in range(grid_rows):
-            for column in range(grid_columns):
-                grid[row].append(self.random_unit_vector())  
-        return grid
     
     
     def ease_curve(self, p):
@@ -47,12 +36,40 @@ class perlin_noise:
         y0 = mt.floor(y)
         y1 = mt.ceil(y)
     
+        if (x0, y0) not in self.grid:
+            vector = self.random_unit_vector()
+            self.grid.update({(x0, y0) : vector})
+            p00 = vector
+        elif (x0, y0) in self.grid:
+            p00 = self.grid[(x0, y0)]
+
+        if (x1, y0) not in self.grid:
+            vector = self.random_unit_vector()
+            self.grid.update({(x1, y0) : vector})
+            p10 = vector
+        elif (x1, y0) in self.grid:
+            p10 = self.grid[(x1, y0)]
+
+        if (x0, y1) not in self.grid:
+            vector = self.random_unit_vector()
+            self.grid.update({(x0, y1) : vector})
+            p01 = vector
+        elif (x0, y1) in self.grid:
+            p01 = self.grid[(x0, y1)]
+
+        if (x1, y1) not in self.grid:
+            vector = self.random_unit_vector()
+            self.grid.update({(x1, y1) : vector})
+            p11 = vector
+        elif (x1, y1) in self.grid:
+            p11 = self.grid[(x1, y1)]            
+    
         # Fetch the random unit vectors corresponding to the corners of the grid
         # square.
-        v_ran00 = [self.grid[x0][y0][0], self.grid[x0][y0][1]]
-        v_ran10 = [self.grid[x1][y0][0], self.grid[x1][y0][1]]
-        v_ran01 = [self.grid[x0][y1][0], self.grid[x0][y1][1]]
-        v_ran11 = [self.grid[x1][y1][0], self.grid[x1][y1][1]]
+        v_ran00 = [p00[0], p00[1]]
+        v_ran10 = [p10[0], p10[1]]
+        v_ran01 = [p01[0], p01[1]]
+        v_ran11 = [p11[0], p11[1]]
         
         # Define the vectors pointing from the corners to the coordinate (x, y).
         v_in00 = [x - x0, y - y0]
@@ -86,17 +103,17 @@ class perlin_noise:
             return point_value, output
 
 
-    def image(self,  width, height):
+    def image(self,  width, height, scale):
         # Make an array for the image.
         image = np.zeros((height, width))
         for y in range(height):
             for x in range(width):
                 # The self.size[0]/width bit scales the index x down to a value in the noise map.
-                point_value = self.value(x*(self.size[0]/width), y*(self.size[1]/height))
+                point_value = self.value(x/scale, y/scale)
                 image[y][x] = point_value
         return image
     
-    def line(self, points):
+    def line(self, points, scale):
         x = [n for n in range(points)]
-        y = [self.value(0, n*self.size[1]/points) for n in range(points)]
+        y = [self.value(n/scale, 0) for n in range(points)]
         return x, y
