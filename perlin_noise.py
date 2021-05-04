@@ -1,198 +1,140 @@
-# https://eev.ee/blog/2016/05/29/perlin-noise/
-# https://rtouti.github.io/graphics/perlin-noise-algorithm
-# https://mzucker.github.io/html/perlin-noise-math-faq.html
-# https://web.archive.org/web/20160530124230/http://freespace.virgin.net/hugo.elias/models/m_perlin.htm
-
-
+import random as rn
 import math as mt
 import numpy as np
-import time
+from numba import njit, jit
 
 
+
+"Small mathsy functions"
+
+@njit(cache = True, fastmath = True)
 def random_unit_vector():
-    # Generate a random unit vector.
-    angle = np.random.random()*2*np.pi
+    angle = rn.random()*2*np.pi
     x = np.cos(angle)
     y = np.sin(angle)
-    return [x, y]
+    return x, y
 
+@njit(cache = True)
+def corners(x, y):
+    l = mt.floor(x)
+    r = mt.ceil(x)
+    b = mt.floor(y)
+    t = mt.ceil(y)
+    return l, r, b, t
+
+@njit(cache = True, fastmath= True)
+def ease_curve(x):
+    value = 0
+    if 0 < x < 1:
+        value = 6*x**5 - 15*x**4 + 10*x**3
+    else:
+        value = 1.0
+    return value
+
+@njit(cache = True)
 def map_value(x, in_min, in_max, out_min, out_max):
-    # Map the value x in the interval [in_min, in_max] linearly to the interval [out_min, out_max]
     return((x - in_min)/(in_max - in_min))*(out_max - out_min) + out_min
 
-
-class perlin_noise:
-    def __init__(self, octaves = 1, octave_scale = 0.5):
-        # Define a list of dictionaries, one for each octave.
-        self.grid = [{} for n in range(octaves)]
-        self.octaves = octaves
-        self.octave_scale = octave_scale
-
-
-    def ease_curve(self, p):
-        # Define an s-shaped curve to smooth the boundaries between grid squares (I think).
-        if p <= 0:
-            value = 0
-        elif 0 < p < 1:
-            value = 6*p**5 - 15*p**4 + 10*p**3
-        elif 1 <= p:
-            value = 1
-        # return 3*p**2 - 2*p**3 # Different ease curve, not sure if there's really any difference.
-        return value
+# combine this with the falloff function, that should be faster
+@njit
+def gaussian_2d(x, y, x0, y0, sigma):
+    x_diff = x - x0
+    y_diff = y - y0
+    return np.exp(-x_diff*x_diff/2*sigma*sigma - y_diff*y_diff/2*sigma*sigma)
 
 
-    def value(self, x, y, full_output = False):
-        point_value = 0
-        
-        for octave in range(self.octaves):
-            # Take the input coordinate in the interval [0, 1] (What happens if it's outside this?) and
-            # map it to the interval [0, octave_scale*octave + 1]. As octave increases, the spacing of 
-            # the output coordinates increases, so they will be spread out over more grid squares. This
-            # grid is then 'shrunk' down to the size of the originl grid to give higher frequency noise.
-            x = map_value(x, 0, 1, 0, (self.octave_scale*octave + 1))
-            y = map_value(y, 0, 1, 0, (self.octave_scale*octave + 1))
-            
-            # Use the scaled coordinates to determine the corners of the current grid square
-            x0 = mt.floor(x)
-            x1 = mt.ceil(x)
-            y0 = mt.floor(y)
-            y1 = mt.ceil(y)
-            
-            # Check if the corner's coordinates are already in the dictionary for this octave and, if not,
-            # add them as a key with a new random unit vector as the corresponding value. Then assign the
-            # corner's vector to a pxy variable.
-            if (x0, y0) not in self.grid[octave]:
-                vector = random_unit_vector()
-                self.grid[octave].update({(x0, y0) : vector})
-                p00 = vector
-            elif (x0, y0) in self.grid[octave]:
-                p00 = self.grid[octave][(x0, y0)]
-    
-            if (x1, y0) not in self.grid[octave]:
-                vector = random_unit_vector()
-                self.grid[octave].update({(x1, y0) : vector})
-                p10 = vector
-            elif (x1, y0) in self.grid[octave]:
-                p10 = self.grid[octave][(x1, y0)]
-    
-            if (x0, y1) not in self.grid[octave]:
-                vector = random_unit_vector()
-                self.grid[octave].update({(x0, y1) : vector})
-                p01 = vector
-            elif (x0, y1) in self.grid[octave]:
-                p01 = self.grid[octave][(x0, y1)]
-    
-            if (x1, y1) not in self.grid[octave]:
-                vector = random_unit_vector()
-                self.grid[octave].update({(x1, y1) : vector})
-                p11 = vector
-            elif (x1, y1) in self.grid[octave]:
-                p11 = self.grid[octave][(x1, y1)]            
-            
-            # Define the vectors pointing from the corners to the coordinate (x, y).
-            v_in00 = [x - x0, y - y0]
-            v_in10 = [x - x1, y - y0]
-            v_in01 = [x - x0, y - y1]
-            v_in11 = [x - x1, y - y1]
-            
-            # For each corner, calculate the dot product of the random unit vector with the inward pointing
-            # vector.
-            dot00 = p00[0]*v_in00[0] + p00[1]*v_in00[1]
-            dot10 = p10[0]*v_in10[0] + p10[1]*v_in10[1]
-            dot01 = p01[0]*v_in01[0] + p01[1]*v_in01[1]
-            dot11 = p11[0]*v_in11[0] + p11[1]*v_in11[1]
-            
-            # Calculate the value of the point (x, y) by taking a weighted average along the top and bottom
-            # edges, then taking a weighted average of these two averages... or something like that.
-            weight_x = self.ease_curve(x - x0)
-            avg_upper = dot00 + weight_x*(dot10 - dot00)
-            avg_lower = dot01 + weight_x*(dot11 - dot01) # Why are these this way round? It's all upside down for some reason
-            weight_y = self.ease_curve(y - y0)
-            # Divide the final value by 2**octave so as the noise frequency increases, amplitude decreases.
-            point_value += (avg_upper + weight_y*(avg_lower - avg_upper))/2**octave
-            # point_value = self.ease_curve(point_value) # This produces a cool effect!
-        
-        if full_output is False:
-            return point_value
-        
-        elif full_output is True:
-            # Output some other bits and pieces if that's what you're into.
-            output = [[[x0, y0], p00, v_in00, dot00],
-                      [[x1, y0], p10, v_in10, dot10],
-                      [[x0, y1], p01, v_in01, dot01],
-                      [[x1, y1], p11, v_in11, dot11]] 
-            return point_value, output
+
+"Core functions for image generation"
+
+@njit(cache = True)
+def gen_grid(grid_width, grid_height, tiling_NS = False, tiling_EW = False):
+    grid_width, grid_height = grid_width + 1, grid_height + 1
+    grid = np.empty((grid_width, grid_height, 2))
+    for x in np.arange(grid_width):
+        for y in np.arange(grid_height):
+            grid[x][y][0], grid[x][y][1] = random_unit_vector()
+    if tiling_NS is True:
+        grid[grid_width - 1, :, :] = grid[0, :, :]
+    if tiling_EW is True:
+        grid[:, grid_height - 1, :] = grid[:, 0, :]
+    return grid
+
+# This is a bit over complicated, uses lots of memory, try to do it with lists or tuples
+@njit(cache = True)
+def gen_grids(grid_width, grid_height, octaves, grid_scale = 1, freq_scale = 2, tiling_NS = False, tiling_EW = False):
+    width, height = grid_width*grid_scale + 1, grid_height*grid_scale + 1
+    grids = np.zeros((octaves,
+                      int(width*freq_scale**(octaves - 1) + 1),
+                      int(height*freq_scale**(octaves - 1) + 1),
+                      2))
+    for octave in np.arange(octaves):
+        for x in np.arange(width*freq_scale**octave):
+            for y in np.arange(height*freq_scale**octave):
+                grids[octave][x][y][0], grids[octave][x][y][1] = random_unit_vector()
+        grids[octave][-1][0][0], grids[octave][0][-1][0] = width*freq_scale**octave, height*freq_scale**octave
+        if tiling_NS is True:
+            grids[octave, width*freq_scale**octave - 1, :, :] = grids[octave, 0, :, :]
+        if tiling_EW is True:
+            grids[octave, :, height*freq_scale**octave - 1, :] = grids[octave, :, 0, :]
+    return grids
+
+@njit(cache = True)
+def value(x, y, grid):
+    l, r, b, t = corners(x, y)
+    dot_list = (grid[l][t][0]*(x - l) + grid[l][t][1]*(y - t),
+                grid[r][t][0]*(x - r) + grid[r][t][1]*(y - t),
+                grid[l][b][0]*(x - l) + grid[l][b][1]*(y - b),
+                grid[r][b][0]*(x - r) + grid[r][b][1]*(y - b))
+    weight_x = ease_curve(x - l)
+    avg_t = dot_list[0] + weight_x*(dot_list[1] - dot_list[0])
+    avg_b = dot_list[2] + weight_x*(dot_list[3] - dot_list[2])
+    weight_y = ease_curve(y - b)
+    point_value = avg_b + weight_y*(avg_t - avg_b)
+    return point_value
+
+@njit(cache = True)
+def image(width, height, grid):
+    grid_width, grid_height = np.shape(grid)[0] - 1, np.shape(grid)[1] - 1
+    image = np.empty((width, height))
+    for x in np.arange(width):
+        for y in np.arange(height):
+            image[x][y] = value((x*grid_width)/width, (y*grid_height)/height, grid)
+    return image
+
+@njit(cache = True)
+def image_from_images(width, height, grid, image_x, image_y):
+    image = np.empty((width, height))
+    for x in np.arange(width):
+        for y in np.arange(height):
+            image[x][y] = value(image_x[x][y], image_y[x][y], grid)
+    return image
+
+# Doesn't really work yet, not sure why
+@njit(cache = True)
+def image_octaves(width, height, grids):
+    image = np.empty((width, height))
+    for octave in np.arange(len(grids)):
+        grid_width, grid_height = grids[octave][-1][0][0], grids[octave][0][-1][0]
+        for x in np.arange(width):
+            for y in np.arange(height):
+                image[x][y] = value((x*grid_width)/width, (y*grid_height)/height, grids[octave])
+    return image
+
+@njit(cache = True)
+def image_bigpix(width, height, grid, pix_size):
+    grid_width, grid_height = np.shape(grid)[0] - 1, np.shape(grid)[1] - 1
+    image = np.empty((width, height))
+    for x in np.arange(0, width, pix_size):
+        for y in np.arange(0, height, pix_size):
+            image[x : x + pix_size, y : y + pix_size] = value((x*grid_width)/width, (y*grid_height)/height, grid)
+    return image
 
 
-    def image(self,  width, height, scale = 1, normalised = True, lower_lim = 0, upper_lim = 1, show_progress = False):
-        # Make an array for the image.
-        image = np.zeros((height, width))
-        # Take the maximum side length.
-        side_length = max([height, width])
-        # Set up some timing stuff and readout headings.
-        if show_progress is True:
-            progress = 0
-            duration = 0
-            print("Progress:\tStep time:")
-        for y_pixel in range(height):
-            for x_pixel in range(width):
-                # Start timer.
-                if show_progress is True:
-                    start = time.perf_counter()
-                # Map the input x and y coordinates to the interval [0, scale] to control "zoom".
-                # The side_length bit keeps the noise grid square so the image doesn't look stretched.
-                x_coord = map_value(x_pixel, 0, side_length, 0, scale)
-                y_coord = map_value(y_pixel, 0, side_length, 0, scale)
-                image[y_pixel][x_pixel] = self.value(x_coord, y_coord)
-                # Print current progress percent and time taken to generate the last percent of the image.
-                if show_progress is True:
-                    progress_temp = np.uint8(round((x_pixel + y_pixel*width)/(width*height), 2)*100)
-                    # End timer.
-                    end = time.perf_counter()
-                    duration += (end - start)
-                    if progress_temp > progress:
-                        progress = progress_temp
-                        print(str(progress) + "%\t\t\t" + str(round(duration, 3)) + "s")
-                        duration = 0
-        if normalised is True:
-            # After the image is generated, map its values to the interval [lower_lim, upper_lim].
-            max_val = np.max(image)
-            min_val = np.min(image)
-            for y_pixel in range(height):
-                for x_pixel in range(width):
-                    value = image[y_pixel][x_pixel]
-                    value = map_value(value, min_val, max_val, lower_lim, upper_lim)
-                    image[y_pixel][x_pixel] = value
-        return image
 
+"Functions to apply to the image"
 
-    def line(self, no_points, scale = 1, normalised = True, lower_lim = 0, upper_lim = 1, show_progress = False):
-        # Make the list of x-coordinates and an empty list for the y-coordinates.
-        x_values = [x_value for x_value in range(no_points)]
-        y_values = []
-        if show_progress is True:
-            progress = 0
-            duration = 0
-            print("Progress:\tStep time:")
-        for point in range(no_points):
-            if show_progress is True:
-                start = time.perf_counter()
-            # It's pretty much the same as the image function from here on out, just in 1 dimension.
-            y_value = map_value(point, 0, no_points, 0, scale)
-            y_values.append(self.value(y_value, 0))
-            if show_progress is True:
-                progress_temp = np.uint8(round(point/no_points, 2)*100)
-                end = time.perf_counter()
-                duration += (end - start)
-                if progress_temp > progress:
-                    progress = progress_temp
-                    print(str(progress) + "%\t\t\t" + str(round(duration, 3)) + "s")
-                    duration = 0
-        if normalised is True:
-            max_val = max(y_values)
-            min_val = min(y_values)
-            for point in range(no_points):
-                value = y_values[point]
-                value = map_value(value, min_val, max_val, lower_lim, upper_lim)
-                y_values[point] = value
-        return x_values, y_values
+@njit(cache = True)
+def normalise(image):
+    normalised_image = (image - np.min(image))/np.ptp(image)
+    return normalised_image
+
